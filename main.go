@@ -314,7 +314,7 @@ func GenerateReport(results []Match, walkedDirs, walkedFiles, scannedFiles int) 
 		fmt.Println()
 		fmt.Println("Shai Hulud IoCs found! System infected!")
 		// Print results
-		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 		_, _ = fmt.Fprintf(tw, "Rule\tPath\n")
 		for _, match := range results {
