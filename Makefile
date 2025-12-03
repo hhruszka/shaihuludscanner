@@ -33,18 +33,36 @@ ifeq ($(UNAME_S),Linux)
     STATIC_FLAGS := -extldflags "-static -lm"
 else ifeq ($(UNAME_S),Darwin)
     PLATFORM := darwin
-    # macOS doesn't support full static linking, but we can link most things statically
+
+    # Detect current macOS version to set MACOSX_DEPLOYMENT_TARGET
+    MACOS_VER := $(shell sw_vers -productVersion 2>/dev/null || echo "14.0")
+
+    # Resolve yara_x_capi static library location
+    YARA_LIB_DIR := $(shell pkg-config --variable=libdir yara_x_capi 2>/dev/null)
+    ifeq ($(YARA_LIB_DIR),)
+        ifneq ($(wildcard /opt/homebrew/opt/yara-x/lib/libyara_x_capi.a),)
+            YARA_LIB_DIR := /opt/homebrew/opt/yara-x/lib
+        else ifneq ($(wildcard /usr/local/opt/yara-x/lib/libyara_x_capi.a),)
+            YARA_LIB_DIR := /usr/local/opt/yara-x/lib
+        else
+            YARA_LIB_DIR := .
+        endif
+    endif
+
+    YARA_CFLAGS := $(shell pkg-config --cflags yara_x_capi 2>/dev/null)
+
+    # Flags to link the static archive explicitly
+    DARWIN_CGO_LDFLAGS := $(YARA_LIB_DIR)/libyara_x_capi.a -framework CoreFoundation -framework Security
+    DARWIN_CGO_CFLAGS := $(YARA_CFLAGS)
+
     STATIC_FLAGS := -extldflags "-lm"
 else
     PLATFORM := unknown
     STATIC_FLAGS :=
 endif
 
-# CGO flags for static linking
-CGO_LDFLAGS := -static
-
 # Full ldflags with static linking
-LDFLAGS_STATIC := $(LDFLAGS) $(STATIC_FLAGS)
+LDFLAGS_STATIC := -linkmode external $(LDFLAGS) $(STATIC_FLAGS)
 
 .PHONY: all build build-static clean test deps install help verify check version run test-coverage build-all build-linux build-darwin
 
@@ -67,7 +85,7 @@ build-static:
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(PLATFORM),linux)
 	CGO_ENABLED=$(CGO_ENABLED) \
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
+	CGO_LDFLAGS="-static" \
 	$(GOBUILD) \
 		-ldflags "$(LDFLAGS_STATIC)" \
 		-tags netgo \
@@ -76,9 +94,25 @@ ifeq ($(PLATFORM),linux)
 		-o $(BUILD_DIR)/$(BINARY_NAME) \
 		$(MAIN_PACKAGE)
 else
+	@echo "Detected YARA Lib Dir: $(YARA_LIB_DIR)"
+	@echo "Generating static pkg-config override at $(BUILD_DIR)/yara_x_capi.pc..."
+	@echo "Name: yara_x_capi" > $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Version: 0.0.1" >> $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Description: Static override" >> $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Cflags: $(DARWIN_CGO_CFLAGS)" >> $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Libs: $(DARWIN_CGO_LDFLAGS)" >> $(BUILD_DIR)/yara_x_capi.pc
+
+	# We set PKG_CONFIG_PATH to the build dir so Go picks up our static-forcing .pc file.
+	# We ALSO pass CGO_LDFLAGS explicitly to handle cases where pkg-config is not used in Go source.
+	# Duplicate library warnings are expected and safe (better than dynamic linking).
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_VER) \
+	PKG_CONFIG_PATH=$(abspath $(BUILD_DIR)) \
 	CGO_ENABLED=$(CGO_ENABLED) \
+	CGO_CFLAGS="$(DARWIN_CGO_CFLAGS)" \
+	CGO_LDFLAGS="$(DARWIN_CGO_LDFLAGS)" \
 	$(GOBUILD) \
-		-ldflags "$(LDFLAGS)" \
+		-a \
+		-ldflags "$(LDFLAGS_STATIC)" \
 		-o $(BUILD_DIR)/$(BINARY_NAME) \
 		$(MAIN_PACKAGE)
 endif
@@ -114,15 +148,38 @@ build-linux:
 build-darwin:
 	@echo "Building binary for macOS..."
 	@mkdir -p $(BUILD_DIR)
+
+	# Logic to find libyara_x_capi.a for build-darwin target
+	$(eval PKG_LIB := $(shell pkg-config --variable=libdir yara_x_capi 2>/dev/null))
+	$(eval FOUND_LIB_DIR := $(if $(PKG_LIB),$(PKG_LIB),$(if $(wildcard /opt/homebrew/opt/yara-x/lib/libyara_x_capi.a),/opt/homebrew/opt/yara-x/lib,$(if $(wildcard /usr/local/opt/yara-x/lib/libyara_x_capi.a),/usr/local/opt/yara-x/lib,.))))
+
+	$(eval YARA_CFLAGS := $(shell pkg-config --cflags yara_x_capi 2>/dev/null))
+	$(eval DARWIN_FLAGS := $(FOUND_LIB_DIR)/libyara_x_capi.a -framework CoreFoundation -framework Security)
+	$(eval MACOS_VER := $(shell sw_vers -productVersion 2>/dev/null || echo "14.0"))
+
+	@echo "Generating static pkg-config override at $(BUILD_DIR)/yara_x_capi.pc..."
+	@echo "Name: yara_x_capi" > $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Version: 0.0.1" >> $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Description: Static override" >> $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Cflags: $(YARA_CFLAGS)" >> $(BUILD_DIR)/yara_x_capi.pc
+	@echo "Libs: $(DARWIN_FLAGS)" >> $(BUILD_DIR)/yara_x_capi.pc
+
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_VER) \
+	PKG_CONFIG_PATH=$(abspath $(BUILD_DIR)) \
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 \
+	CGO_CFLAGS="$(YARA_CFLAGS)" CGO_LDFLAGS="$(DARWIN_FLAGS)" \
 	$(GOBUILD) \
-		-ldflags "$(LDFLAGS)" \
+		-ldflags "$(LDFLAGS) -linkmode external -extldflags '-lm'" \
 		-o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 \
 		$(MAIN_PACKAGE)
 	@echo "macOS AMD64 build complete: $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64"
+
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_VER) \
+	PKG_CONFIG_PATH=$(abspath $(BUILD_DIR)) \
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 \
+	CGO_CFLAGS="$(YARA_CFLAGS)" CGO_LDFLAGS="$(DARWIN_FLAGS)" \
 	$(GOBUILD) \
-		-ldflags "$(LDFLAGS)" \
+		-ldflags "$(LDFLAGS) -linkmode external -extldflags '-lm'" \
 		-o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 \
 		$(MAIN_PACKAGE)
 	@echo "macOS ARM64 build complete: $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64"
@@ -183,6 +240,7 @@ ifeq ($(PLATFORM),linux)
 else ifeq ($(PLATFORM),darwin)
 	@echo "Dynamic libraries:"
 	@otool -L $(BUILD_DIR)/$(BINARY_NAME)
+	@echo "Note: If you see libyara_x_capi.dylib above, static linking failed."
 endif
 	@echo ""
 	@echo "Binary size:"
