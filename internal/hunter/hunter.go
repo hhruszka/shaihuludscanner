@@ -12,16 +12,10 @@ import (
 	"strings"
 	"sync"
 
+	yara_x "github.com/VirusTotal/yara-x/go"
 	"github.com/go-enry/go-enry/v2"
-	"github.com/hillu/go-yara/v4"
 	yh "shaihuludscanner/internal/yara"
 )
-
-//type ThreatScanner struct {
-//	rulesContent string
-//	compiler     *yara.Compiler
-//	compiledRules
-//}
 
 var excludeDirs = []string{"/proc", "/sys", "/dev", "/run"}
 
@@ -129,11 +123,6 @@ func shouldScanV2(path string, filename string) bool {
 	return false
 }
 
-type Match struct {
-	Rule string
-	Path string
-}
-
 func reportFinding(resultChan chan yh.Match, rule string, path string) {
 	resultChan <- yh.Match{Rule: rule, FilePath: path}
 }
@@ -149,6 +138,9 @@ func WalkDirectories(ctx context.Context, fileChan chan string, resultChan chan 
 			default:
 			}
 
+			if err != nil {
+				return filepath.SkipDir
+			}
 			// Check for suspicious directories
 			if info.IsDir() {
 				walkedDirs += 1
@@ -174,9 +166,9 @@ func WalkDirectories(ctx context.Context, fileChan chan string, resultChan chan 
 	return walkedDirs, walkedFiles, scannedFiles
 }
 
-func ScanWorker(ctx context.Context, fileChan chan string, resultChan chan yh.Match, rules *yara.Rules, pw *progress.Writer) {
+func ScanWorker(ctx context.Context, fileChan chan string, resultChan chan yh.Match, rules *yara_x.Rules, pw *progress.Writer) {
 	// Each worker gets its own scanner
-	scanner, _ := yara.NewScanner(rules)
+	scanner := yara_x.NewScanner(rules)
 	defer scanner.Destroy()
 	var (
 		err  error
@@ -198,7 +190,7 @@ func ScanWorker(ctx context.Context, fileChan chan string, resultChan chan yh.Ma
 			pw.Progress("\rScanning: %s", path)
 		}
 
-		var matches yara.MatchRules
+		var matches *yara_x.ScanResults
 
 		fd, err = os.Open(path)
 		if err != nil {
@@ -206,7 +198,8 @@ func ScanWorker(ctx context.Context, fileChan chan string, resultChan chan yh.Ma
 			continue
 		}
 
-		if err := scanner.SetCallback(&matches).ScanFileDescriptor(fd.Fd()); err != nil {
+		matches, err = scanner.ScanFile(path)
+		if err != nil {
 			pw.Println("Yara error: %s for %s file\n", err.Error(), path)
 			fd.Close()
 			continue
@@ -221,7 +214,7 @@ func ScanWorker(ctx context.Context, fileChan chan string, resultChan chan yh.Ma
 	}
 }
 
-func ScanFileSystem(ctx context.Context, compiledYaraRules *yara.Rules, filePaths []string) ([]yh.Match, int, int, int) {
+func ScanFileSystem(ctx context.Context, compiledYaraRules *yara_x.Rules, filePaths []string) ([]yh.Match, int, int, int) {
 	if compiledYaraRules == nil {
 		return nil, 0, 0, 0
 	}

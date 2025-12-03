@@ -1,13 +1,15 @@
 package yara
 
-import "github.com/hillu/go-yara/v4"
+import (
+	yara_x "github.com/VirusTotal/yara-x/go"
+)
 
 // getYaraMatchRuleMeta retrieves the string value of a specified metadata identifier from a YARA match rule.
 // If the identifier does not exist, it returns the identifier concatenated with "not defined".
-func getYaraMatchRuleMeta(m yara.MatchRule, identifier string) string {
-	for _, meta := range m.Metas {
-		if meta.Identifier == identifier {
-			value, ok := meta.Value.(string)
+func yaraMeta(m *yara_x.Rule, identifier string) string {
+	for _, meta := range m.Metadata() {
+		if meta.Identifier() == identifier {
+			value, ok := meta.Value().(string)
 			if ok {
 				return value
 			}
@@ -16,10 +18,20 @@ func getYaraMatchRuleMeta(m yara.MatchRule, identifier string) string {
 	return identifier + "not defined"
 }
 
-func ToMatches(yaraMatches yara.MatchRules, fileName string) []*Match {
-	matches := make([]*Match, len(yaraMatches))
-	for _, match := range yaraMatches {
-		matches = append(matches, NewMatch(match.Rule, fileName, getYaraMatchRuleMeta(match, "severity"), getYaraMatchRuleMeta(match, "description")))
+func ToMatches(yaraMatches *yara_x.ScanResults, fileName string) []*Match {
+	matchingRules := yaraMatches.MatchingRules()
+	if len(matchingRules) == 0 {
+		return nil
+	}
+
+	matches := make([]*Match, len(matchingRules))
+	for i, match := range matchingRules {
+		matches[i] = &Match{
+			Rule:        match.Identifier(),
+			FilePath:    fileName,
+			Severity:    yaraMeta(match, "severity"),
+			Description: yaraMeta(match, "description"),
+		}
 	}
 	return matches
 }

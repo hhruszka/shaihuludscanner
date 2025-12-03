@@ -2,11 +2,10 @@ package yara
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"shaihuludscanner/internal/rules"
 
-	"github.com/hillu/go-yara/v4"
+	"github.com/VirusTotal/yara-x/go"
 )
 
 // YaraHunter represents a structure for managing YARA rules, including file paths, rule content, and compiled rules.
@@ -15,8 +14,8 @@ import (
 type YaraHunter struct {
 	rulesFilePath string
 	rulesContent  string
-	compiledRules *yara.Rules
-	scanner       *yara.Scanner
+	compiledRules *yara_x.Rules
+	scanner       *yara_x.Scanner
 }
 
 // YaraOptionFunc is a function type used to modify or configure a YaraHunter instance during its initialization.
@@ -35,17 +34,14 @@ func NewYaraHunter(opts ...YaraHunterOptionFunc) (*YaraHunter, error) {
 		if err != nil {
 			return nil, fmt.Errorf("")
 		}
-		yh.scanner, err = yara.NewScanner(yh.compiledRules)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create yara scanner; %w", err)
-		}
+		yh.scanner = yara_x.NewScanner(yh.compiledRules)
 	}
 
 	return yh, nil
 }
 
 // GetRules returns the rules content
-func (yh *YaraHunter) GetRules() (*yara.Rules, error) {
+func (yh *YaraHunter) GetRules() (*yara_x.Rules, error) {
 	if yh.compiledRules == nil {
 		return nil, fmt.Errorf("rules not compiled yet")
 	}
@@ -59,30 +55,18 @@ func (yh *YaraHunter) GetRulesName() string {
 
 // ScanData scans the provided data slice in memory using YARA rules and returns matching rules or an error.
 func (yh *YaraHunter) ScanData(data []byte) ([]*Match, error) {
-	yaraMatches := new(yara.MatchRules)
-	err := yh.scanner.SetCallback(yaraMatches).ScanMem(data)
+	yaraMatches, err := yh.scanner.Scan(data)
 	if err != nil {
 		return nil, err
 	}
-	return ToMatches(*yaraMatches, ""), nil
+	return ToMatches(yaraMatches, ""), nil
 }
 
 // ScanFile scans a file specified by its file path using YARA rules and returns matching rules or an error.
 func (yh *YaraHunter) ScanFile(filePath string) ([]*Match, error) {
-	yaraMatches := new(yara.MatchRules)
-	err := yh.scanner.SetCallback(yaraMatches).ScanFile(filePath)
+	yaraMatches, err := yh.scanner.ScanFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	return ToMatches(*yaraMatches, filePath), nil
-}
-
-// ScanFileDescriptor scans the content of a given file descriptor using YARA rules and returns matching rules or an error.
-func (yh *YaraHunter) ScanFileDescriptor(fd *os.File) ([]*Match, error) {
-	yaraMatches := new(yara.MatchRules)
-	err := yh.scanner.SetCallback(yaraMatches).ScanFileDescriptor(fd.Fd())
-	if err != nil {
-		return nil, err
-	}
-	return ToMatches(*yaraMatches, fd.Name()), nil
+	return ToMatches(yaraMatches, filePath), nil
 }

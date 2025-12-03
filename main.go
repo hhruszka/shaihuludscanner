@@ -46,8 +46,13 @@ func main() {
 	fmt.Printf("Using %s yara rules set\n", rules.DefaultRulesName())
 	fmt.Println()
 
+	rules, err := rules.DefaultRules()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load yara rules;%w", err)
+		os.Exit(1)
+	}
 	// Scan Filesystem
-	results, walkedDirs, walkedFiles, scannedFiles := hunter.ScanFileSystem(ctx, rules.DefaultRules(), filePaths)
+	results, walkedDirs, walkedFiles, scannedFiles := hunter.ScanFileSystem(ctx, rules, filePaths)
 	// Reporting
 	reports.GenerateReport(results, walkedDirs, walkedFiles, scannedFiles)
 }
